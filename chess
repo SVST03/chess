@@ -1,0 +1,115 @@
+#step 1: Data Collection
+import chess
+import chess.pgn
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+
+# Sample data loading function
+def load_chess_data(file_path):
+    positions = []
+    labels = []
+    with open(file_path, 'r') as pgn:
+        game = chess.pgn.read_game(pgn)
+        while game:
+            board = game.board()
+            for move in game.mainline_moves():
+                board.push(move)
+                positions.append(board.fen())
+                labels.append(1 if game.headers["Result"] == "1-0" else 0)
+            game = chess.pgn.read_game(pgn)
+    return positions, labels
+-----------------------------------------------------------------------------
+Step 2: Preprocessing
+
+def fen_to_tensor(fen):
+    board = chess.Board(fen)
+    piece_map = board.piece_map()
+    tensor = np.zeros((64, 12), dtype=np.float32)
+    
+    piece_to_index = {
+        'P': 0, 'N': 1, 'B': 2, 'R': 3, 'Q': 4, 'K': 5,
+        'p': 6, 'n': 7, 'b': 8, 'r': 9, 'q': 10, 'k': 11
+    }
+    
+    for square, piece in piece_map.items():
+        tensor[square][piece_to_index[piece.symbol()]] = 1
+    
+    return tensor.flatten()
+
+class ChessDataset(Dataset):
+    def __init__(self, positions, labels):
+        self.positions = positions
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.positions)
+
+    def __getitem__(self, idx):
+        position = fen_to_tensor(self.positions[idx])
+        label = self.labels[idx]
+        return position, label
+------------------------------------------------------------------------
+Step 3: Model Design
+
+class ChessNet(nn.Module):
+    def __init__(self):
+        super(ChessNet, self).__init__()
+        self.fc1 = nn.Linear(64 * 12, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, 1)
+
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = torch.sigmoid(self.fc3(x))
+        return x
+------------------------------------------------------------------------------
+
+Step 4: Training
+
+positions, labels = load_chess_data("chess_games.pgn")
+dataset = ChessDataset(positions, labels)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+model = ChessNet()
+criterion = nn.BCELoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+for epoch in range(10):  # Training for 10 epochs
+    for inputs, targets in dataloader:
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets.unsqueeze(1).float())
+        loss.backward()
+        optimizer.step()
+    print(f"Epoch {epoch+1}, Loss: {loss.item()}")
+--------------------------------------------------------------------------------------
+Step 5: Integration
+
+def evaluate_position(fen):
+    model.eval()
+    with torch.no_grad():
+        input_tensor = torch.tensor(fen_to_tensor(fen)).unsqueeze(0)
+        output = model(input_tensor)
+        return output.item()
+
+def get_best_move(board, model):
+    best_move = None
+    best_value = -float('inf')
+    for move in board.legal_moves:
+        board.push(move)
+        value = evaluate_position(board.fen())
+        board.pop()
+        if value > best_value:
+            best_value = value
+            best_move = move
+    return best_move
+
+# Example usage
+board = chess.Board()
+best_move = get_best_move(board, model)
+print("Best move:", best_move)
+
